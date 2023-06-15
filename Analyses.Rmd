@@ -1,0 +1,664 @@
+---
+title: "Analyses"
+author: "Anders Skyrud Danielsen"
+output:
+  html_document: default
+---
+
+```{r setup and variables, include=FALSE}
+
+# Set up R environment and define global chunk options
+knitr::opts_chunk$set(echo = F, warning = F, message = F) # Disables echoing, warnings and messages in knitted output
+
+# Load necessary packages
+pacman::p_load(
+  tidyverse,  # For data manipulation and visualization
+  markdown,   # For markdown formatting
+  gtsummary,  # For descriptive statistics
+  broom,      # For tidying model outputs
+  ggplot2,    # For data visualization
+  viridis,    # For color palettes
+  lubridate,  # For date manipulation
+  rio,        # For data import/export
+  scales,     # For graphical scales
+  lmtest,     # For linear regression testing
+  dotwhisker, # For regression visualization
+  sandwich,   # For robust covariance matrix estimation
+  incidence2, # For incidence computation
+  knitr,      # For dynamic report generation
+  splines     # For spline functions
+)
+
+# Set the default ggplot2 theme
+theme_set(theme_classic())
+
+# Set the working directory
+setwd("~")
+
+# Import the data
+study1_data <- import("study1_data.rds")
+
+# Data manipulation: Create new variables 'startdato' and 'sluttdato' and recode 'fodeland_string'
+study1_data <- study1_data %>%
+  mutate(startdato = ymd(DIAGNOSEDATO) - years(1),
+         sluttdato = ymd(DIAGNOSEDATO) + years(3),
+         sluttdato = if_else(notifiable==1, Proevedato, sluttdato),
+         startslutt = sluttdato-startdato) %>%
+  mutate(fodeland_2 = case_when(
+    fodeland_string == "Norway" ~ "Norway",
+    TRUE ~ "Other (or missing)"
+  ))
+
+```
+
+# The epidemiology of multidrug-resistant organisms in cancer patients in Norway, 2008-2018 
+
+## Analyses
+
+These are the analyses as described in the manuscript. Please see the manuscript for introduction, methods, results, and discussion.
+
+### Table 1
+
+*Table 1. Characteristics of patients diagnosed with cancer in Norway from 2008 to 2018 at the time of their first cancer diagnosis, stratified by whether they were reported with multidrug-resistant organisms (MDROs) from six months prior to or up to three years after cancer diagnosis. MDROs include methicillin-resistant Staphylococcus aureus (MRSA), vancomycin- and/or linezolid-resistant enterococci (V/LRE), and carbapenemase-producing Gram-negative bacteria (CP-GNB).*
+
+```{r table 1}
+
+# Adjust variable levels and recode for the study1_data dataframe
+study1_data <- study1_data %>% # English value names and reordering of levels
+  mutate(alder_kat = factor(alder_kat, levels = c("<40 years", "40-49 years", "50-59 years", "60-69 years", 
+                                                  "70-79 years", ">79 years"))) %>% # Reorder age categories
+  mutate(inf_diag = factor(inf_diag, levels = c("MRSA", "VRE(/LRE)", "CPO"))) %>% # Reorder infection diagnosis categories
+  mutate(KJOENN = recode(KJOENN, "K" = "F")) %>% # Recode gender variable
+  mutate(Storby = case_when(fylke_string == "Oslo" ~ "Oslo", 
+                            TRUE ~ "Other residency")) %>% # Recode residency variable
+  mutate(forverring_string = case_when(forverring == 1 ~ "New cancer, same site",
+                                       forverring == 2 ~ "New cancer, new site",
+                                       forverring == 3 ~ "New metastasis",
+                                        TRUE ~ "No new cancer")) # Recode cancer progression variable
+
+# Generate summary table based on different microbe types
+table1_a <- study1_data %>%
+  select(ALDER, KJOENN, Storby, fodeland_2, diagnose_3, SEER_STADIUM, forverring_string, surgery, radiation, inf_diag) %>%
+  tbl_summary(
+    by = inf_diag,
+    percent = "row",
+    digits = all_categorical() ~ c(0,2),
+    statistic = all_categorical() ~ "{n}",
+    label = list(
+      ALDER ~ "Age (continuous)", 
+      #alder_kat ~ "Age (categorical)", 
+      KJOENN ~ "Sex", 
+      Storby ~ "Oslo", 
+      fodeland_2 ~ "Country of birth", 
+      diagnose_3 ~ "Type of cancer", 
+      SEER_STADIUM ~ "Cancer dissemination",
+      forverring_string ~ "Cancer progression",
+      surgery ~ "Surgery reported", 
+      radiation ~ "Radiotherapy reported"
+    )
+  ) %>%
+  modify_spanning_header(c("stat_1", "stat_2", "stat_3") ~ "**Resistant notifiable microbe**") %>%
+  modify_header(
+    stat_1 ~ "MRSA, n = {n}",
+    stat_2 ~ "VRE(/LRE), n = {n}",
+    stat_3 ~ "CPO, n = {n}",
+  )
+
+# Generate summary table based on notifiable disease status
+table1_b <- study1_data %>%
+  select(ALDER, KJOENN, Storby, fodeland_2, diagnose_3, SEER_STADIUM, forverring_string, surgery, radiation, notifiable) %>%
+  tbl_summary(
+    by = notifiable,
+    percent = "row",
+    digits = all_categorical() ~ c(0,2), 
+    label = list(
+      ALDER ~ "Age (continuous)", 
+      #alder_kat ~ "Age (categorical)", 
+      KJOENN ~ "Sex", 
+      Storby ~ "Oslo", 
+      fodeland_2 ~ "Country of birth", 
+      diagnose_3 ~ "Type of cancer", 
+      SEER_STADIUM ~ "Cancer dissemination",
+      forverring_string ~ "Cancer progression",
+      surgery ~ "Surgery reported",  
+      radiation ~ "Radiotherapy reported"
+    )
+  ) %>%
+  add_overall() %>%
+  modify_header(
+    stat_1 ~ "No notifiable microbe, n = {n}",
+    stat_2 ~ "Notifiable microbe, n = {n}"
+  )
+
+# Merge two tables
+table_1 <- tbl_merge(tbls = list(table1_b, table1_a), tab_spanner = F)
+
+# Print the merged table
+table_1
+
+```
+
+### Table 2
+
+*Table 2. Characteristics of multidrug-resistant organisms (MDROs) in cancer patients six months prior to or up to three years after their first cancer diagnosis in Norway from 2008 to 2018, stratified by bacteria. MDROs include methicillin-resistant Staphylococcus aureus (MRSA), vancomycin- and/or linezolid-resistant enterococci (V/LRE), and carbapenemase-producing Gram-negative bacilli (CP-GNB).*
+
+
+```{r table 2} 
+
+# Update the study1_data dataframe with new variables
+study1_data <- study1_data %>%
+  mutate(inf_status_string = case_when(
+    inf_status == 1 ~ "Infection", # Recode infection status as "Infection" when inf_status is 1
+    inf_status == 0 ~ "Carriage", # Recode infection status as "Carriage" when inf_status is 0
+    inf_status == 3 | (is.na(inf_status) & !is.na(notifiable)) ~ "Unknown" # Recode infection status as "Unknown" when inf_status is 3 or when inf_status is NA but notifiable is not NA
+  )) %>%
+  mutate(SmittetIUtlandet = case_when(
+    SmittetIUtlandet == "Norge" ~ "Norway", # Recode SmittetIUtlandet as "Norway" when its value is "Norge"
+    SmittetIUtlandet == "Utlandet" ~ "Abroad", # Recode SmittetIUtlandet as "Abroad" when its value is "Utlandet"
+    SmittetIUtlandet == "Ukjent" | (is.na(Infeksjonsstatus) & !is.na(notifiable)) ~ "Unknown" # Recode SmittetIUtlandet as "Unknown" when its value is "Ukjent" or when Infeksjonsstatus is NA but notifiable is not NA
+  ))
+
+# Create a summary table using infection status, place of transmission, and infection diagnosis
+table_2 <- study1_data %>% 
+  select(inf_status_string, SmittetIUtlandet, inf_diag) %>%
+  tbl_summary(
+    by = inf_diag, # Group by infection diagnosis
+    label = list(
+      inf_status_string ~ "Infection status", # Set label for inf_status_string
+      SmittetIUtlandet ~ "Place of transmission" # Set label for SmittetIUtlandet
+    )
+  ) %>% 
+  add_overall() # Add overall statistics to the table
+
+# Print table_2
+table_2
+
+```
+
+### Figure 2
+
+*Figure 2. Incidence rates of infection, colonisation and total of multidrug-resistant organisms (MDROs) by person-years, found in cancer patients six months prior to or up to three years after their first cancer diagnosis in Norway from 2008 to 2018. Dashed lines represent observation time outside of the inclusion period, with diminishing person-years. MDROs include methicillin-resistant Staphylococcus aureus (MRSA), vancomycin- and/or linezolid-resistant enterococci (VRE/LRE), and carbapenemase-producing Gram-negative bacilli (CP-GNB).*
+
+```{r figure 2, fig.height=12} 
+
+# Calculate the incidence of different infection statuses and diagnoses per year
+incidence <- incidence(study1_data, Proevedato, interval = "years", groups = c(inf_diag, inf_status_2)) 
+incidence$date_index <- as.double(incidence$date_index)
+
+# Add rows for missing years and infection status/diagnosis combinations
+incidence <- incidence %>%
+  add_row(date_index = as.double(2007),
+          inf_diag = "MRSA",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2007),
+          inf_diag = "MRSA",
+          inf_status_2 = 1,
+          count = 0) %>%
+  add_row(date_index = as.double(2007),
+          inf_diag = "VRE(/LRE)",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2007),
+          inf_diag = "VRE(/LRE)",
+          inf_status_2 = 1,
+          count = 0) %>%
+  add_row(date_index = as.double(2008),
+          inf_diag = "VRE(/LRE)",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2008),
+          inf_diag = "VRE(/LRE)",
+          inf_status_2 = 1,
+          count = 0) %>%
+  add_row(date_index = as.double(2009),
+          inf_diag = "VRE(/LRE)",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2012),
+          inf_diag = "CPO",
+          inf_status_2 = 1,
+          count = 0) %>%
+  add_row(date_index = as.double(2013),
+          inf_diag = "CPO",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2015),
+          inf_diag = "CPO",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2016),
+          inf_diag = "CPO",
+          inf_status_2 = 1,
+          count = 0) %>%
+  add_row(date_index = as.double(2021),
+          inf_diag = "MRSA",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2021),
+          inf_diag = "VRE(/LRE)",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2021),
+          inf_diag = "VRE(/LRE)",
+          inf_status_2 = 1,
+          count = 0) %>%
+  add_row(date_index = as.double(2021),
+          inf_diag = "CPO",
+          inf_status_2 = 0,
+          count = 0) %>%
+  add_row(date_index = as.double(2021),
+          inf_diag = "CPO",
+          inf_status_2 = 1,
+          count = 0) %>%
+  group_by(inf_diag, date_index) %>%
+  bind_rows(summarise(., across(where(is.numeric), sum),
+                      inf_status_2=2))
+
+# Create a data frame with the start and end dates of each year
+df_years <- tibble(
+  yr=2007:2021
+) %>% 
+  mutate(yr_start = paste0(yr,'-01-01'), yr_end = paste0(yr, '-12-31')) %>% 
+  type_convert()
+
+# Create a data frame with the number of days each patient contributed to each year
+df_out <- study1_data %>% 
+  crossing(df_years) %>% 
+  mutate(days_in_yr = pmin(sluttdato, yr_end) - pmax(startdato, yr_start)) %>% 
+  filter(days_in_yr>0)
+
+# Sum the person-days for each year
+person_days <- df_out %>% 
+  group_by(yr) %>% 
+  summarise(person_days=sum(days_in_yr))
+
+# Merge the person_days data frame with the incidence data frame and calculate the incidence rate
+incidence <- incidence %>%
+  left_join(person_days, by = c("date_index" = "yr")) %>%
+  mutate(personyears = person_days/365.25) %>%
+  mutate(incidence_rate = (count/as.double(personyears))*100000) 
+
+# Fit Poisson regression models to the data
+Poisson.MRSArate <- glm(count ~ date_index + offset(log(as.numeric(personyears))), family = "poisson", data = subset(incidence, inf_diag == "MRSA" & inf_status_2 == 2))
+Poisson.VRErate <- glm(count ~ date_index + offset(log(as.numeric(personyears))), family = "poisson", data = subset(incidence, inf_diag == "VRE(/LRE)" & inf_status_2 == 2))
+Poisson.CPOrate <- glm(count ~ date_index + offset(log(as.numeric(personyears))), family = "poisson", data = subset(incidence, inf_diag == "CPO" & inf_status_2 == 2))
+
+# Print summaries of the models
+print(summary(Poisson.MRSArate))
+print(summary(Poisson.VRErate))
+print(summary(Poisson.CPOrate))
+
+# Create line plots of the incidence rates over time
+ggplot_MRSA <- ggplot(data = subset(incidence, inf_diag == "MRSA"), aes(y=incidence_rate, x=date_index, group = inf_status_2)) +
+  geom_line(data=subset(incidence, inf_diag == "MRSA" & date_index <= 2008), linetype = "dashed", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_line(data=subset(incidence, inf_diag == "MRSA" & date_index >= 2018), linetype = "dashed", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_line(data=subset(incidence, inf_diag == "MRSA" & (date_index >= 2008 & date_index <= 2019)), linetype = "solid", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_point(aes(colour = factor(inf_status_2), alpha = as.numeric(personyears)), size = 2, shape = 19) +
+  ylab("Incidence rate per 100,000 person-years") +
+  xlab("Year of follow-up time") +
+  ggtitle("MRSA") +
+  scale_x_continuous(n.breaks = 14) +
+  theme_classic(base_size = 12) + 
+  scale_colour_manual(name = "Infection status", values = c("#978bc4", "#523f9e", "#31255e"), labels = c("Colonisation or unknown", "Infection", "Total")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  guides(alpha = F)
+
+ggplot_VRE <- ggplot(data = subset(incidence, inf_diag == "VRE(/LRE)"), aes(y=incidence_rate, x=date_index, group = inf_status_2)) +
+  geom_line(data=subset(incidence, inf_diag == "VRE(/LRE)" & date_index <= 2008), linetype = "dashed", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_line(data=subset(incidence, inf_diag == "VRE(/LRE)" & date_index >= 2018), linetype = "dashed", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_line(data=subset(incidence, inf_diag == "VRE(/LRE)" & (date_index >= 2008 & date_index <= 2019)), linetype = "solid", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_point(aes(colour = factor(inf_status_2), alpha = as.numeric(personyears)), size = 2, shape = 19) +
+  ylab("Incidence rate per 100,000 person-years") +
+  xlab("Year of follow-up time") +
+  ggtitle("VRE(/LRE)") +
+  scale_x_continuous(n.breaks = 14) +
+  theme_classic(base_size = 12) + 
+  scale_colour_manual(name = "Infection status", values = c("#978bc4", "#523f9e", "#31255e"), labels = c("Colonisation or unknown", "Infection", "Total")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  guides(alpha = F)
+
+ggplot_CPO <- ggplot(data = subset(incidence, inf_diag == "CPO"), aes(y=incidence_rate, x=date_index, group = inf_status_2)) +
+  geom_line(data=subset(incidence, inf_diag == "CPO" & (date_index < 2008 | date_index > 2018)), linetype = "dashed", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_line(data=subset(incidence, inf_diag == "CPO" & (date_index >= 2008 & date_index <= 2019)), linetype = "solid", aes(colour = factor(inf_status_2)), size=1.2) +
+  geom_point(aes(colour = factor(inf_status_2), alpha = as.numeric(personyears)), size = 2, shape = 19) +
+  # geom_vline(xintercept = 2012, linetype = "dashed", size = 1.5, alpha = 0.6) +
+  ylab("Incidence rate per 100,000 person-years") +
+  xlab("Year of follow-up time") +
+  ggtitle("CP-GNB") +
+  scale_x_continuous(n.breaks = 14) +
+  # annotate(x=2013, y=9.5, label = "CPO \n became \n notifiable", geom = "label") +
+  theme_classic(base_size = 12) + 
+  scale_colour_manual(name = "Infection status", values = c("#978bc4", "#523f9e", "#31255e"), labels = c("Colonisation or unknown", "Infection", "Total")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  guides(alpha = F)
+
+# Arrange the plots into a single figure
+figur2 <- ggarrange(ggplot_MRSA, ggplot_VRE, ggplot_CPO, ncol = 1, common.legend = T, heights = 2) 
+
+# Print the figure
+figur2
+
+# Create a table of person-years for each year
+incidence_table <- incidence[,c("date_index", "personyears")]
+incidence_table <- incidence_table %>%
+  mutate(personyears = as.numeric(round(personyears, 0))) %>%
+  distinct(date_index, personyears) %>%
+  rename(Personyears = personyears)
+
+```
+
+### Table S2
+
+*Table S2. Person-years included in the incidence rate calculation in figure 2.*
+
+```{r table S2}
+
+kable(incidence_table, col.names = c("Year", "Person-years"))
+
+```
+
+### Figure 3
+
+*Figure 3. Density estimate for the finding of multidrug-resistant organisms (MDROs) by time since cancer diagnosis six months prior to or up to three years after the first cancer diagnosis of persons in Norway, from 2008 to 2018. MDROs include methicillin-resistant Staphylococcus aureus (MRSA), vancomycin- and/or linezolid-resistant enterococci (V/LRE), carbapenemase-producing Gram-negative bacilli (CP-GNB), and third-generation cephalosporin-resistant Enterobacterales (3GCR-E).*
+
+```{r figur 3}
+# Calculate time until infection based on either notifiable status or TGCRE status
+study1_data_tid <- study1_data %>% 
+  mutate(tid_til_smitte = case_when( 
+    notifiable == 1 ~ ymd(Proevedato)-ymd(startdato),
+    TGCRE == 1 ~ ymd(SampleDate)-ymd(startdato))) %>% 
+  mutate(tid_til_smitte = as.numeric(tid_til_smitte)) %>%
+  mutate(inf_diag = case_when(
+    TGCRE == 1 ~ "3GCR-E",
+    inf_diag == "MRSA" ~ "MRSA",
+    inf_diag == "VRE(/LRE)" ~ "V/LRE",
+    inf_diag == "CPO" ~ "CP-GNB"
+  )) %>% 
+  filter(tid_til_smitte<1500) %>%
+  mutate(tid_til_smitte = tid_til_smitte-365)
+
+# Create histogram of time until infection
+tid_til_smitte <- ggplot(data = study1_data_tid) +
+  geom_histogram(mapping = aes(x = tid_til_smitte, fill = inf_diag), binwidth = 122) +
+  scale_fill_viridis_d(option = "D", end = 0.9, alpha = 0.8) +
+  guides(fill = guide_legend("Resistant bacteria")) +
+  scale_x_continuous(n.breaks = 10) +
+  ylab("Counts") +
+  xlab("Days since diagnosis") 
+
+# Create density plot of time until infection
+tid_til_smitte <- ggplot(data = study1_data_tid) +
+  geom_density(mapping = aes(x = tid_til_smitte, colour = inf_diag), size = 1.5) +
+  ylab("Density estimate") +
+  xlab("Days since diagnosis") +
+  geom_vline(xintercept = 0, linetype = "dashed", size = 1.5, alpha = 0.6) +
+  annotate(x=0, y=0.0035, label = "Cancer diagnosis", geom = "label") +
+  theme_classic(base_size = 12) + 
+  guides(colour = guide_legend("Resistant bacteria")) +
+  scale_x_continuous(n.breaks = 12) +
+  scale_color_viridis_d(option = "D", direction = -1, end = 0.9, alpha = 0.8)
+
+# Return the density plot
+tid_til_smitte
+
+```
+
+### Figure 4
+
+*Figure 4. Age- and sex-standardised incidence rate ratios (IRR) of infection/colonisation with either methicillin-resistant Staphylococcus aureus (MRSA) or vancomycin- and/or linezolid-resistant enterococci (V/LRE) in cancer patients six months prior to or up to three years after their first cancer diagnosis in Norway, from 2008 to 2018, by different cancer types.*
+
+```{r figur 4}
+
+# Regression
+
+# Recode the data and calculate the diagnosis year
+study1_data <- study1_data %>%
+  mutate(MRSA = ifelse(inf_diag == "MRSA", 1, NA)) %>% 
+  mutate(VRE = ifelse(inf_diag == "VRE(/LRE)", 1, NA)) %>% 
+  replace_na(list(MRSA = 0, VRE = 0)) %>% 
+  mutate(diagnose_3 = fct_relevel(diagnose_3, "Gastrointestinal")) %>% 
+  mutate(diagnosisyear = year(DIAGNOSEDATO))
+
+# Fit Poisson model for MRSA
+Poisson.MRSA <- glm(MRSA ~ ALDER + KJOENN + diagnose_3 + offset(log(as.numeric(startslutt))), family = "poisson", data = study1_data)
+
+# Use robust standard errors
+Poisson.robust.MRSA <- coeftest(Poisson.MRSA,
+                           vcov = sandwich)
+
+# Prepare coefficients for presentation
+Poisson.robust.MRSA <- tidy(Poisson.robust.MRSA, conf.int = TRUE, exponentiate = TRUE)
+
+# Further processing of coefficients for MRSA
+Poisson.robust.MRSA <- Poisson.robust.MRSA %>% 
+  mutate(estimate = exp(estimate),
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high)) %>% 
+  filter(!str_detect(term, "ALDER") & term!= "KJOENNM" & term!= "(Intercept)") %>% 
+  mutate(term = str_sub(term, 11)) %>% 
+  arrange(desc(estimate)) %>% 
+  add_row(term = "Gastrointestinal", estimate = 1, .before = 1)
+
+# Fit Poisson model for VRE
+Poisson.VRE <- glm(VRE ~ ALDER + KJOENN + diagnose_3 + offset(log(as.numeric(startslutt))), family = "poisson", data = study1_data)
+
+# Here is the code where I decided not to use splines
+# I checked the BIC and performed a likelihood ratio test between the models
+#Poisson.VREspline <- glm(VRE ~ ns(ALDER, 2) + KJOENN + diagnose_3 + ns(diagnosisyear, 5) + offset(log(as.numeric(startslutt))), family = "poisson", data = study1_data)
+#Poisson.VRElinear <- glm(VRE ~ ALDER + KJOENN + diagnose_3 + offset(log(as.numeric(startslutt))), family = "poisson", data = study1_data)
+
+#BIC(Poisson.VREspline)
+#BIC(Poisson.VRElinear)
+
+#lrtest(Poisson.VREspline, Poisson.VRElinear)
+
+# This is slightly worse, as is restricted cubic splines
+#ald_quants <- quantile(study1_data$ALDER, probs = c(0.33, 0.67))
+#Poisson.VRE_quants <- glm(VRE ~ ns(ALDER, knots = ald_quants) + KJOENN + diagnose_3 + offset(log(as.numeric(startslutt))), family = "poisson", data = study1_data)
+#AIC(Poisson.VRE_quants) 
+
+# plot to check predicted vs observed for the spline
+# Add the observed values of VRE and ALDER to the dataframe
+#study1_data$Observed_VRE <- study1_data$VRE
+#study1_data$ALDER <- study1_data$ALDER
+
+#newdata <- tibble(KJOENN = "K", diagnose_3 = "Gastrointestinal", ALDER = seq(18,85,1), startslutt = 1461)
+
+# Predict the values using the Poisson regression model
+#newdata$Predicted_VRE <- predict(Poisson.VRE, newdata = newdata, type = "response")
+
+# Calculate the mean predicted and observed VRE values for each unique ALDER value
+#mean_values <- study1_data %>%
+#  group_by(ALDER) %>%
+#  summarise(Mean_Predicted_VRE = mean(Predicted_VRE),
+#           Mean_Observed_VRE = mean(Observed_VRE))
+
+# Create a scatterplot of mean observed vs mean predicted values
+#ggplot(newdata, aes(x = ALDER)) +
+#  geom_line(aes(y = Predicted_VRE), color = "red", size = 1) +
+#  labs(x = "ALDER", y = "VRE") +
+#  ggtitle("Mean Observed vs Mean Predicted Values of VRE") +
+#  theme_minimal()
+
+# Robust standard errors for VRE
+Poisson.robust.VRE <- coeftest(Poisson.VRE,
+                           vcov = sandwich)
+
+# Prepare coefficients for presentation
+Poisson.robust.VRE <- tidy(Poisson.robust.VRE, conf.int = TRUE, exponentiate = TRUE)
+
+# Further processing of coefficients for VRE
+Poisson.robust.VRE <- Poisson.robust.VRE %>% 
+  mutate(estimate = exp(estimate),
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high)) %>% 
+  filter(!str_detect(term, "ALDER") & term!= "KJOENNM" & term!= "(Intercept)") %>% 
+  mutate(term = str_sub(term, 11)) %>% 
+  arrange(desc(estimate)) %>% 
+  add_row(term = "Gastrointestinal", estimate = 1, .before = 1)
+
+# Prepare theme for plots
+theme_set(theme_bw())
+
+# Create the plot
+plot.new()
+par(c(2,1))
+figure4_a <- dwplot(Poisson.robust.MRSA, dot_args = list(size = 3), whisker_args = list(size = 1)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 20)) +
+  geom_vline(xintercept = 1) +
+  xlab("Incidence rate ratio") +
+  ylab("Cancer types") +
+  labs(title = "MRSA") +
+  theme_bw(base_size = 12) +
+  scale_color_viridis_d(begin = 0.3)
+
+# Create the second plot
+figure4_b <- dwplot(Poisson.robust.VRE, dot_args = list(size = 3), whisker_args = list(size = 1)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 20)) +
+  geom_vline(xintercept = 1) +
+  xlab("Incidence rate ratio") +
+  ylab("Cancer types") +
+  labs(title = "V/LRE") +
+  theme_bw(base_size = 12) +
+  scale_color_viridis_d(begin = 0.3)
+
+# Arrange and display the plots
+figur4 <- ggarrange(figure4_a, figure4_b, ncol = 1, heights = 2, legend = "none")
+figur4
+
+# Fit Poisson model for healthcare workers
+Poisson.healthcare <- glm(notifiable ~ ALDER + KJOENN + helse + offset(log(as.numeric(startslutt))), family = "poisson", data = study1_data)
+
+# Robust standard errors for healthcare model
+Poisson.robust.healthcare <- coeftest(Poisson.healthcare,
+                           vcov = sandwich)
+
+# Prepare coefficients for presentation
+Poisson.robust.healthcare <- tidy(Poisson.robust.healthcare, conf.int = TRUE, exponentiate = TRUE)
+
+```
+
+### Table 3
+
+*Table 3. Characteristics of patients diagnosed with or treated for cancer at Oslo University Hospital from 2008 to 2018, in whom Enterobacterales were found in blood or urine from six months prior to or up to three years after first cancer diagnosis. The table is stratified by whether they were found to have a third-generation cephalosporin-resistant Enterobacterales (3GCR-E) or third-generation cephalosporin-susceptible Enterobacterales (3GCS-E).*
+
+
+```{r table 3}
+
+# Recoding species names
+study1_data <- study1_data %>% 
+  mutate(Species = case_when(
+    Species == "Andre Escherichia spp." ~ "Other findings",
+    Species == "Andre funn" ~ "Other findings",
+    TRUE ~ Species
+  ))
+
+# Creating summary table with select variables
+table3 <- study1_data %>%
+  select(ALDER, KJOENN, Storby, fodeland_2, Species, diagnose_3, SEER_STADIUM, forverring_string, surgery, radiation, TGCRE) %>%
+  tbl_summary(
+    by = TGCRE,
+    percent = "row",
+    digits = all_categorical() ~ c(0,2), 
+    label = list(
+      ALDER ~ "Age (continuous)", 
+      #alder_kat ~ "Age (categorical)", 
+      KJOENN ~ "Sex", 
+      Storby ~ "Oslo", 
+      fodeland_2 ~ "Country of birth", 
+      Species ~ "Species",
+      diagnose_3 ~ "Type of cancer", 
+      SEER_STADIUM ~ "Cancer dissemination",
+      forverring_string ~ "Cancer progression",
+      surgery ~ "Surgery reported",
+      radiation ~ "Radiotherapy reported"
+    )
+  ) %>%
+  add_overall() %>%  # Add overall column
+  modify_header(
+    stat_1 ~ "3GCS-E, n = {n}",  # Modify header for first stats column
+    stat_2 ~ "3GCR-E, n = {n}"  # Modify header for second stats column
+  )
+
+# Print the table
+table3
+
+``` 
+
+### Figure 5
+
+*Figure 5: The proportion of Enterobacterales resistant to third-generation cephalosporins found in the blood or urine of patients diagnosed with or treated for cancer at Oslo University Hospital by year the sample was taken, found from six months prior to or up to three years after the first cancer diagnosis from 2008 to 2018.*
+
+```{r figure 5}
+# Select only rows with non-NA TGCRE values and add a year column for the sample date
+study1_data_figure5 <- study1_data %>% 
+  mutate(TGCRE_select = ifelse(!is.na(TGCRE), 1, NA)) %>%
+  filter(!is.na(TGCRE_select)) %>%
+  arrange(desc(TGCRE)) %>%
+  mutate(SampleYear = year(SampleDate))
+
+# Calculate summary statistics and confidence intervals for each year
+figure5_CI <- study1_data_figure5 %>%
+  group_by(SampleYear) %>%
+  summarise(n=n(), n_pos=sum(TGCRE), pct_pos = round(100*n_pos/n, 1)) %>% 
+  rowwise() %>% 
+  mutate(lci = (round(100*binom.test(n_pos, n)$conf.int[1],1))/100,
+         uci = (round(100*binom.test(n_pos, n)$conf.int[2],1))/100
+         ) 
+
+# Merge the summary statistics back into the data
+study1_data_figure5 <- study1_data_figure5 %>% 
+  left_join(figure5_CI, by = "SampleYear")
+
+# Create the plot
+figure5 <- ggplot(study1_data_figure5, aes(SampleYear, y = TGCRE_select, fill = factor(TGCRE))) + 
+  geom_col(position = "fill") + 
+  geom_errorbar(aes(x=SampleYear, ymin=lci, ymax=uci, width=0.3)) +
+  scale_y_continuous(labels = scales::percent) + 
+  scale_fill_manual(name = "Enterobacterales", values = c("#978bc4", "#523f9e"), labels = c("Susceptible", "Resistant")) +
+  coord_cartesian(ylim = c(0,0.25)) +
+  ylab("Proportion of Enterobacterales resistant to \n third-generation cephalosporins") +
+  xlab("Year of sample") +
+  guides(colour = guide_legend("Enterobacterales")) +
+  scale_x_continuous(breaks = c(2007,2009,2011,2013,2015,2017,2019,2021)) 
+
+# Display the plot
+figure5
+
+# Calculate person-days for each year
+df_out_TGCRE <- study1_data %>% 
+  filter(!is.na(TGCRE)) %>% 
+  crossing(df_years) %>% 
+  mutate(days_in_yr = pmin(sluttdato, yr_end) - pmax(startdato, yr_start)) %>% 
+  filter(days_in_yr>0)
+
+person_days_TGCRE <- df_out_TGCRE %>% 
+  group_by(yr) %>% 
+  summarise(person_days=sum(days_in_yr))
+
+# Merge person-days into the data
+figure5_CI <- figure5_CI %>%
+  left_join(person_days_TGCRE, by = c("SampleYear" = "yr")) %>%
+  mutate(personyears = person_days/365.25) 
+
+# Fit and print a Poisson regression model
+Poisson.TGCRErate <- glm(n_pos ~ SampleYear + offset(log(as.numeric(personyears))), family = "poisson", data = figure5_CI)
+print(summary(Poisson.TGCRErate))
+
+```
+
+### Export of figures
+
+```{r eksport, eval=F}
+
+# Exports
+
+ggsave("figure2.png", plot = figur2, dpi = 320, width = 25, height = 50, units = "cm")
+ggsave("figure3.png", plot = figur4, dpi = 320, width = 25, height = 30, units = "cm")
+ggsave("figure4.png", plot = figure5, dpi = 320, width = 25, height = 20, units = "cm")
+ggsave("figureS2.png", plot = tid_til_smitte, dpi = 320, width = 25, height = 25, units = "cm")
+
+
+```
+
